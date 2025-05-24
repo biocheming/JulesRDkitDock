@@ -2,6 +2,11 @@ import numpy as np
 import math
 from rdkit import Chem
 
+# --- Vinardo Steric Interaction Parameters (mirrored from scoring.py for grid calculation) ---
+WEIGHT_GAUSS1 = -0.045      # Attractive Gaussian component
+WEIGHT_REPLUSION = 0.8       # Repulsive linear component for d < d_ij_ideal
+C1_GAUSS = 0.5               # Width for the attractive Gaussian
+
 # --- Global VDW Radii Sum Defaults ---
 # (protein_atom_type - probe_atom_type: sum_of_vdw_radii)
 # Based on types from atom_typer.py:
@@ -163,16 +168,23 @@ def populate_energy_grid(protein_mol, grid_definition, atom_types_to_probe):
                             VDW_RADII_SUM_DEFAULTS.get(pair_key2, DEFAULT_VDW_SUM)
                         )
                         
-                        if distance < 1e-4: # Effectively zero distance, strong repulsion
-                            interaction_energy = 100.0 
+                        # New Vinardo steric interaction calculation
+                        if distance < 1e-6: # Avoid issues with distance being exactly zero if atoms overlap perfectly
+                            # Apply a very high repulsion or use the formula which will also be very high
+                            # Using the formula directly: d_ij_ideal - 0.0 (max possible repulsion for this pair)
+                            interaction_energy = WEIGHT_REPLUSION * d_ij_ideal 
+                                                 # Potentially add WEIGHT_GAUSS1 if d=0 makes exp(huge_negative) -> 0
+                                                 # Or simply a large penalty:
+                            # interaction_energy = 1000.0 # Large penalty for direct overlap
                         else:
-                            gauss1 = math.exp(-(((distance - d_ij_ideal) / 0.5)**2))
-                            gauss2 = math.exp(-(((distance - d_ij_ideal) / 2.0)**2)) # Repulsive envelope
+                            gauss1_attractive_exp_term = math.exp(-(((distance - d_ij_ideal) / C1_GAUSS)**2))
+                            gauss1_contrib = WEIGHT_GAUSS1 * gauss1_attractive_exp_term
                             
-                            if distance < d_ij_ideal: # Within VdW radius sum, repulsion active
-                                interaction_energy = -0.5 * gauss1 + 1.0 * (1.0 - gauss2)
-                            else: # Outside VdW radius sum, only attraction
-                                interaction_energy = -0.5 * gauss1
+                            repulsion_contrib = 0.0
+                            if distance < d_ij_ideal:
+                                repulsion_contrib = WEIGHT_REPLUSION * (d_ij_ideal - distance)
+                            
+                            interaction_energy = gauss1_contrib + repulsion_contrib
                         
                         total_interaction_energy_for_probe += interaction_energy
                     
